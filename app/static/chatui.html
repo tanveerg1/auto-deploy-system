@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Deploy Chat</title>
+    <style>
+      body { font-family: Arial, sans-serif; background:#f5f6fa; margin:0; padding:20px; }
+      .container { max-width:800px; margin:0 auto; }
+      .chat-window { background:#fff; border:1px solid #ddd; height:360px; overflow:auto; padding:12px; border-radius:6px; display:flex; flex-direction:column; gap:8px; }
+      .message { padding:8px 12px; border-radius:6px; max-width:85%; }
+      .user { background:#daf1ff; align-self:flex-end; }
+      .bot { background:#f1f1f1; align-self:flex-start; }
+      form { display:flex; gap:8px; margin-top:12px; align-items:flex-end; flex-direction:column; }
+      textarea { width:100%; height:80px; resize:vertical; padding:8px; }
+      .row { display:flex; gap:8px; width:100%; }
+      input[type="text"] { flex:1; padding:8px; }
+      input[type="file"] { padding:4px; }
+      button { padding:10px 14px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Deploy Chat</h2>
+      <div id="chat" class="chat-window"></div>
+
+      <form id="deployForm">
+        <textarea name="description" id="description" placeholder="Describe what you want (required)" required></textarea>
+        <div class="row">
+          <input type="text" name="repo_url" id="repo_url" placeholder="Git repo URL (optional)">
+          <input type="file" name="zip_file" id="zip_file" accept=".zip">
+          <button type="submit">Send</button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      const form = document.getElementById('deployForm');
+      const chat = document.getElementById('chat');
+
+      function appendMessage(text, cls) {
+        const el = document.createElement('div');
+        el.className = 'message ' + cls;
+        el.textContent = text;
+        chat.appendChild(el);
+        chat.scrollTop = chat.scrollHeight;
+      }
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const desc = fd.get('description');
+        appendMessage(desc, 'user');
+        appendMessage('Sending to server...', 'bot');
+
+        try {
+          const res = await fetch('/deploy', { method: 'POST', body: fd });
+          if (!res.body) {
+            const text = await res.text();
+            appendMessage('No stream support: ' + text, 'bot');
+            return;
+          }
+          // clear the last "Sending to server..." message by removing last bot message
+          const msgs = chat.querySelectorAll('.message.bot');
+          if (msgs.length) { msgs[msgs.length - 1].remove(); }
+
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n');
+            buffer = parts.pop(); // last piece may be incomplete
+            for (const part of parts) {
+              if (!part.trim()) continue;
+              try {
+                const obj = JSON.parse(part);
+                const cls = obj.type === 'error' ? 'bot' : (obj.type === 'success' ? 'bot' : 'bot');
+                appendMessage(obj.text || JSON.stringify(obj), cls);
+              } catch (err) {
+                appendMessage(part, 'bot');
+              }
+            }
+          }
+          if (buffer.trim()) {
+            try {
+              const obj = JSON.parse(buffer);
+              appendMessage(obj.text || JSON.stringify(obj), 'bot');
+            } catch (err) {
+              appendMessage(buffer, 'bot');
+            }
+          }
+        } catch (err) {
+          appendMessage('Error: ' + err.message, 'bot');
+        }
+      });
+    </script>
+  </body>
+</html>
